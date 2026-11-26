@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 import statistics
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,8 @@ from ..fwastats import ClanSummary, FwaStatsError, MemberWeight, normalize_tag, 
 
 if TYPE_CHECKING:
     from ..main import PakOriginalsBot
+
+DEFAULT_FRESHNESS_DAYS = 7
 
 DISPLAY_TH_KEYS: tuple[str, ...] = (
     "TH19",
@@ -29,6 +32,37 @@ DISPLAY_TH_KEYS: tuple[str, ...] = (
     "TH8",
     "TH<=7",
 )
+
+
+def _parse_iso_utc(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def filter_recent_weighed_clans(
+    clans: list[ClanSummary],
+    *,
+    days: int = DEFAULT_FRESHNESS_DAYS,
+    now: datetime | None = None,
+) -> list[ClanSummary]:
+    """Return clans with an estimated weight updated within the last `days` days."""
+    reference = now if now is not None else datetime.now(timezone.utc)
+    cutoff = reference - timedelta(days=days)
+    recent: list[ClanSummary] = []
+    for clan in clans:
+        if clan.estimated_weight is None:
+            continue
+        submitted = _parse_iso_utc(clan.weight_submit_date)
+        if submitted is not None and submitted >= cutoff:
+            recent.append(clan)
+    return recent
 
 
 def _member_band_counts(members: list[MemberWeight]) -> Counter[str]:
@@ -48,13 +82,15 @@ def format_average_embed(
     *,
     clan_name: str = DEFAULT_CLAN_NAME,
     clan_tag: str = DEFAULT_CLAN_TAG,
+    days: int = DEFAULT_FRESHNESS_DAYS,
+    now: datetime | None = None,
 ) -> discord.Embed:
-    """Build an embed comparing FWA-wide median clan weights and TH bands to The Originals."""
-    weighed_clans = [c for c in clans if c.estimated_weight is not None]
-    if not weighed_clans:
-        raise FwaStatsError("fwastats.com returned no clans with estimated weights.")
+    """Build an embed comparing recent FWA median clan weights and TH bands to The Originals."""
+    recent_clans = filter_recent_weighed_clans(clans, days=days, now=now)
+    if not recent_clans:
+        raise FwaStatsError(f"fwastats.com returned no clans updated within the last {days} days.")
 
-    fwa_weights = [c.estimated_weight * 1000 for c in weighed_clans if c.estimated_weight is not None]
+    fwa_weights = [c.estimated_weight * 1000 for c in recent_clans if c.estimated_weight is not None]
     median_weight = round(statistics.median(fwa_weights))
     min_weight = min(fwa_weights)
     max_weight = max(fwa_weights)
@@ -79,7 +115,7 @@ def format_average_embed(
 
     rows: list[str] = ["TH    | FWA Med | Originals"]
     for key in DISPLAY_TH_KEYS:
-        vals = [c.th_counts.get(key, 0) for c in weighed_clans]
+        vals = [c.th_counts.get(key, 0) for c in recent_clans]
         fwa_med_th = statistics.median(vals)
         orig_count = originals_bands.get(key, 0)
         if fwa_med_th == 0 and orig_count == 0:
@@ -87,12 +123,12 @@ def format_average_embed(
         rows.append(f"{key:<5} | {fwa_med_th:>7.1f} | {orig_count:>9}")
 
     embed = discord.Embed(
-        title=f"FWA Clan Median vs {clan_name} ({clan_tag})",
+        title=f"FWA Clan Median (Last {days}d) vs {clan_name} ({clan_tag})",
         description="```\n" + "\n".join(rows) + "\n```",
         color=discord.Color.teal(),
     )
     embed.add_field(
-        name=f"FWA Weight ({len(weighed_clans)}/{len(clans)} clans)",
+        name=f"FWA Weight ({len(recent_clans)}/{len(clans)} clans, {days}d)",
         value=(
             f"Median: **{median_weight:,}**\n"
             f"Range: {min_weight:,} – {max_weight:,}"
@@ -110,7 +146,7 @@ def format_average_embed(
         inline=True,
     )
     embed.set_footer(
-        text="Source: fwastats.com (Clans.json + Members.json) • Originals column uses 10k weight bands"
+        text=f"Source: fwastats.com (last {days}d Clans.json + Members.json) • Originals uses 10k weight bands"
     )
     return embed
 
@@ -118,7 +154,7 @@ def format_average_embed(
 def build_average_command() -> app_commands.Command:
     @app_commands.command(
         name="average",
-        description=f"Compare FWA median clan weight and TH bands against {DEFAULT_CLAN_NAME}.",
+        description=f"Compare FWA median clan weight (last {DEFAULT_FRESHNESS_DAYS}d) against {DEFAULT_CLAN_NAME}.",
     )
     async def average_command(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
