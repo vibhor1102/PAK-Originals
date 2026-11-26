@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 
 import discord
+from aiohttp import web
 from discord.ext import commands
 
 from .commands.weights import build_weights_command
@@ -42,11 +45,52 @@ class PakOriginalsBot(commands.Bot):
         await super().close()
 
 
-def main() -> None:
+def create_web_app(bot: PakOriginalsBot) -> web.Application:
+    """Create the HTTP app used by Render health checks and UptimeRobot."""
+    app = web.Application()
+
+    async def index(_request: web.Request) -> web.Response:
+        return web.Response(text="PAK-Originals bot is awake.")
+
+    async def health(_request: web.Request) -> web.Response:
+        latency = bot.latency
+        latency_ms = round(latency * 1000) if latency is not None and math.isfinite(latency) else None
+        return web.json_response(
+            {
+                "status": "ok",
+                "discord_ready": bot.is_ready(),
+                "latency_ms": latency_ms,
+            }
+        )
+
+    app.router.add_get("/", index)
+    app.router.add_get("/health", health)
+    return app
+
+
+async def start_web_server(bot: PakOriginalsBot, port: int) -> web.AppRunner:
+    runner = web.AppRunner(create_web_app(bot))
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    LOGGER.info("Health server listening on port %d.", port)
+    return runner
+
+
+async def run() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     config = AppConfig.from_env()
     bot = PakOriginalsBot(config)
-    bot.run(config.discord_token, log_handler=None)
+    runner = await start_web_server(bot, config.port)
+    try:
+        await bot.start(config.discord_token)
+    finally:
+        await bot.close()
+        await runner.cleanup()
+
+
+def main() -> None:
+    asyncio.run(run())

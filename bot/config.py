@@ -9,6 +9,7 @@ DOTENV_PATH = REPO_ROOT / ".env"
 
 DEFAULT_CLAN_TAG = "#2LCUU9YYU"
 DEFAULT_CLAN_NAME = "The Originals"
+DEFAULT_PORT = 3000
 
 
 def load_dotenv(path: Path = DOTENV_PATH) -> None:
@@ -33,6 +34,7 @@ class AppConfig:
 
     discord_token: str
     discord_guild_id: int | None = None
+    port: int = DEFAULT_PORT
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -50,7 +52,16 @@ class AppConfig:
             except ValueError as exc:
                 raise RuntimeError("DISCORD_GUILD_ID must be a valid integer.") from exc
 
+        raw_port = os.getenv("PORT", "").strip()
+        port = DEFAULT_PORT
+        if raw_port:
+            try:
+                port = int(raw_port)
+            except ValueError as exc:
+                raise RuntimeError("PORT must be a valid integer.") from exc
+
         return cls(
             discord_token=discord_token,
             discord_guild_id=discord_guild_id,
+            port=port,
         )
