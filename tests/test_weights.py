@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from bot.commands.weights import format_weights_embed, sort_members_by_weight
-from bot.fwastats import FwaStatsError, MemberWeight, normalize_tag, parse_member_weights
+from bot.fwastats import FwaStatsError, MemberWeight, normalize_tag, parse_member_weights, weight_to_th_band
 
 
 class FwaStatsParsingTests(unittest.TestCase):
@@ -12,6 +12,15 @@ class FwaStatsParsingTests(unittest.TestCase):
         self.assertEqual(normalize_tag(" #2LCUU9YYU "), "#2LCUU9YYU")
         with self.assertRaises(ValueError):
             normalize_tag("   ")
+
+    def test_weight_to_th_band_boundaries(self) -> None:
+        self.assertIsNone(weight_to_th_band(None))
+        self.assertIsNone(weight_to_th_band(0))
+        self.assertEqual(weight_to_th_band(170_000), 17)
+        self.assertEqual(weight_to_th_band(170_001), 18)
+        self.assertEqual(weight_to_th_band(180_000), 18)
+        self.assertEqual(weight_to_th_band(180_001), 19)
+        self.assertEqual(weight_to_th_band(190_000), 19)
 
     def test_parse_member_weights_valid_payload(self) -> None:
         payload = [
@@ -57,14 +66,15 @@ class WeightsFormattingTests(unittest.TestCase):
 
         embed = format_weights_embed(members)
         self.assertIn("The Originals (#2LCUU9YYU)", embed.title or "")
-        self.assertIn("1.* TH19 | 179,000 | Top", embed.description or "")
-        self.assertIn("2.  TH16 | 150,000 | Lower", embed.description or "")
-        self.assertIn("3.  TH14 |     N/A | Unweighed", embed.description or "")
+        self.assertIn("1.* TH18 | 179,000 | Top (TH19)", embed.description or "")
+        self.assertIn("2.  TH15 | 150,000 | Lower (TH16)", embed.description or "")
+        self.assertIn("3.  TH?? |     N/A | Unweighed", embed.description or "")
 
         fields = {f.name: f.value for f in embed.fields}
         self.assertEqual(fields["Members"], "3 (1 in war)")
         self.assertEqual(fields["In-War Weight"], "179,000")
         self.assertEqual(fields["Total Roster Weight"], "329,000")
+        self.assertEqual(fields["Weight-Band THs (In War)"], "TH18: 1")
 
 
 if __name__ == "__main__":

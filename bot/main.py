@@ -8,6 +8,7 @@ import discord
 from aiohttp import web
 from discord.ext import commands
 
+from .commands.average import build_average_command
 from .commands.weights import build_weights_command
 from .config import AppConfig
 from .fwastats import FwaStatsClient
@@ -26,6 +27,7 @@ class PakOriginalsBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         self.tree.add_command(build_weights_command())
+        self.tree.add_command(build_average_command())
 
         if self.config.discord_guild_id is not None:
             guild = discord.Object(id=self.config.discord_guild_id)
