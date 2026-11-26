@@ -40,15 +40,15 @@ class AverageCommandTests(unittest.TestCase):
             MemberWeight("#2", "P2", 19, 185000, True, 2, "Member"),
         ]
         embed = format_average_embed(clans, members)
-        self.assertIn("FWA Clan Average vs The Originals", embed.title or "")
-        self.assertIn("TH19  |     12.7 |    12.0 |         1", embed.description or "")
-        self.assertIn("TH18  |     14.0 |    14.0 |         1", embed.description or "")
+        self.assertIn("FWA Clan Median vs The Originals", embed.title or "")
+        self.assertIn("TH19  |    12.0 |         1", embed.description or "")
+        self.assertIn("TH18  |    14.0 |         1", embed.description or "")
 
         fields = {f.name: f.value for f in embed.fields}
-        self.assertIn("Mean: **7,800,000**", fields["FWA Weight (3/3 clans)"])
         self.assertIn("Median: **8,000,000**", fields["FWA Weight (3/3 clans)"])
+        self.assertNotIn("Mean:", fields["FWA Weight (3/3 clans)"])
         self.assertIn("In-War Weight: **364,000** (2 members)", fields["The Originals"])
-        self.assertIn("vs Mean: **+600,000**", fields["The Originals"])
+        self.assertIn("vs Median: **+400,000**", fields["The Originals"])
 
 
 if __name__ == "__main__":

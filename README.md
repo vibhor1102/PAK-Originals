@@ -19,4 +19,4 @@ Discord bot for **The Originals** (`#2LCUU9YYU`).
 ## Commands
 
 - `/weights` — Fetches current member war weights for **The Originals** (`#2LCUU9YYU`) from `fwastats.com` and categorizes players by 10k TH weight bands (`(170k, 180k]` = TH18, `(180k, 190k]` = TH19, etc.).
-- `/average` — Shows FWA-wide mean/median clan weights and TH composition from `fwastats.com/Clans.json` alongside **The Originals**.
+- `/average` — Shows FWA-wide median clan weight and TH composition from `fwastats.com/Clans.json` alongside **The Originals**.

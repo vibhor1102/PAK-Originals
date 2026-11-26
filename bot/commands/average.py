@@ -49,13 +49,12 @@ def format_average_embed(
     clan_name: str = DEFAULT_CLAN_NAME,
     clan_tag: str = DEFAULT_CLAN_TAG,
 ) -> discord.Embed:
-    """Build an embed comparing FWA-wide mean/median clan weights and TH bands to The Originals."""
+    """Build an embed comparing FWA-wide median clan weights and TH bands to The Originals."""
     weighed_clans = [c for c in clans if c.estimated_weight is not None]
     if not weighed_clans:
         raise FwaStatsError("fwastats.com returned no clans with estimated weights.")
 
     fwa_weights = [c.estimated_weight * 1000 for c in weighed_clans if c.estimated_weight is not None]
-    mean_weight = round(statistics.mean(fwa_weights))
     median_weight = round(statistics.median(fwa_weights))
     min_weight = min(fwa_weights)
     max_weight = max(fwa_weights)
@@ -78,25 +77,23 @@ def format_average_embed(
 
     originals_bands = _member_band_counts(active_roster)
 
-    rows: list[str] = ["TH    | FWA Mean | FWA Med | Originals"]
+    rows: list[str] = ["TH    | FWA Med | Originals"]
     for key in DISPLAY_TH_KEYS:
         vals = [c.th_counts.get(key, 0) for c in weighed_clans]
-        fwa_mean_th = statistics.mean(vals)
         fwa_med_th = statistics.median(vals)
         orig_count = originals_bands.get(key, 0)
-        if fwa_mean_th < 0.05 and fwa_med_th == 0 and orig_count == 0:
+        if fwa_med_th == 0 and orig_count == 0:
             continue
-        rows.append(f"{key:<5} | {fwa_mean_th:>8.1f} | {fwa_med_th:>7.1f} | {orig_count:>9}")
+        rows.append(f"{key:<5} | {fwa_med_th:>7.1f} | {orig_count:>9}")
 
     embed = discord.Embed(
-        title=f"FWA Clan Average vs {clan_name} ({clan_tag})",
-        description=f"```\n" + "\n".join(rows) + "\n```",
+        title=f"FWA Clan Median vs {clan_name} ({clan_tag})",
+        description="```\n" + "\n".join(rows) + "\n```",
         color=discord.Color.teal(),
     )
     embed.add_field(
         name=f"FWA Weight ({len(weighed_clans)}/{len(clans)} clans)",
         value=(
-            f"Mean: **{mean_weight:,}**\n"
             f"Median: **{median_weight:,}**\n"
             f"Range: {min_weight:,} – {max_weight:,}"
         ),
@@ -106,10 +103,7 @@ def format_average_embed(
     originals_lines = [f"In-War Weight: **{roster_weight:,}** ({len(active_roster)} members)"]
     if est_weight is not None:
         originals_lines.append(f"FWA Est. Weight: **{est_weight:,}**")
-    originals_lines.append(
-        f"vs Mean: **{compare_weight - mean_weight:+,}**\n"
-        f"vs Median: **{compare_weight - median_weight:+,}**"
-    )
+    originals_lines.append(f"vs Median: **{compare_weight - median_weight:+,}**")
     embed.add_field(
         name=f"{clan_name}",
         value="\n".join(originals_lines),
@@ -124,7 +118,7 @@ def format_average_embed(
 def build_average_command() -> app_commands.Command:
     @app_commands.command(
         name="average",
-        description=f"Compare FWA mean/median clan weights and TH bands against {DEFAULT_CLAN_NAME}.",
+        description=f"Compare FWA median clan weight and TH bands against {DEFAULT_CLAN_NAME}.",
     )
     async def average_command(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
