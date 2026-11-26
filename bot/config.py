@@ -34,6 +34,7 @@ class AppConfig:
 
     discord_token: str
     discord_guild_id: int | None = None
+    database_url: str | None = None
     port: int = DEFAULT_PORT
 
     @classmethod
@@ -52,6 +53,8 @@ class AppConfig:
             except ValueError as exc:
                 raise RuntimeError("DISCORD_GUILD_ID must be a valid integer.") from exc
 
+        database_url = os.getenv("DATABASE_URL", "").strip() or None
+
         raw_port = os.getenv("PORT", "").strip()
         port = DEFAULT_PORT
         if raw_port:
@@ -63,5 +66,6 @@ class AppConfig:
         return cls(
             discord_token=discord_token,
             discord_guild_id=discord_guild_id,
+            database_url=database_url,
             port=port,
         )

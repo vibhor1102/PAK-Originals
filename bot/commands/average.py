@@ -11,6 +11,7 @@ from discord import app_commands
 
 from ..config import DEFAULT_CLAN_NAME, DEFAULT_CLAN_TAG
 from ..fwastats import ClanSummary, FwaStatsError, MemberWeight, normalize_tag, weight_to_th_band
+from .weights import TARGET_WAR_SIZE, build_provisional_roster, load_projected_roster
 
 if TYPE_CHECKING:
     from ..main import PakOriginalsBot
@@ -65,6 +66,43 @@ def filter_recent_weighed_clans(
     return recent
 
 
+def adjust_medians_to_total(
+    th_series: dict[str, list[int]],
+    *,
+    target_total: int = TARGET_WAR_SIZE,
+) -> dict[str, int]:
+    """Compute per-TH integer medians and adjust along (mean - count) skew so total == target_total."""
+    counts: dict[str, int] = {}
+    means: dict[str, float] = {}
+    for key, vals in th_series.items():
+        if not vals:
+            counts[key] = 0
+            means[key] = 0.0
+            continue
+        counts[key] = round(statistics.median(vals))
+        means[key] = statistics.mean(vals)
+
+    current_total = sum(counts.values())
+    if current_total == target_total or not counts:
+        return counts
+
+    while current_total < target_total:
+        candidates = [k for k in counts if means[k] > 0] or list(counts.keys())
+        best = max(candidates, key=lambda k: (means[k] - counts[k], means[k]))
+        counts[best] += 1
+        current_total += 1
+
+    while current_total > target_total:
+        candidates = [k for k in counts if counts[k] > 0]
+        if not candidates:
+            break
+        best = min(candidates, key=lambda k: (means[k] - counts[k], -counts[k]))
+        counts[best] -= 1
+        current_total -= 1
+
+    return counts
+
+
 def _member_band_counts(members: list[MemberWeight]) -> Counter[str]:
     counts: Counter[str] = Counter()
     for member in members:
@@ -80,12 +118,13 @@ def format_average_embed(
     clans: list[ClanSummary],
     members: list[MemberWeight],
     *,
+    departed_members: list[MemberWeight] | None = None,
     clan_name: str = DEFAULT_CLAN_NAME,
     clan_tag: str = DEFAULT_CLAN_TAG,
     days: int = DEFAULT_FRESHNESS_DAYS,
     now: datetime | None = None,
 ) -> discord.Embed:
-    """Build an embed comparing recent FWA median clan weights and TH bands to The Originals."""
+    """Build an embed comparing 50-adjusted FWA median THs and weight to The Originals."""
     recent_clans = filter_recent_weighed_clans(clans, days=days, now=now)
     if not recent_clans:
         raise FwaStatsError(f"fwastats.com returned no clans updated within the last {days} days.")
@@ -95,32 +134,40 @@ def format_average_embed(
     min_weight = min(fwa_weights)
     max_weight = max(fwa_weights)
 
+    th_series = {key: [c.th_counts.get(key, 0) for c in recent_clans] for key in DISPLAY_TH_KEYS}
+    adjusted_medians = adjust_medians_to_total(th_series, target_total=TARGET_WAR_SIZE)
+
     normalized_target = normalize_tag(clan_tag)
     clan_summary = next(
         (c for c in clans if c.tag and normalize_tag(c.tag) == normalized_target),
         None,
     )
 
-    in_war = [m for m in members if m.in_war is True]
-    active_roster = in_war if in_war else members
-    roster_weight = sum(m.weight for m in active_roster if m.weight is not None and m.weight > 0)
+    entries, current_count, provisional_count = build_provisional_roster(
+        members, departed_members, target_size=TARGET_WAR_SIZE
+    )
+    projected_members = [e.member for e in entries]
+    projected_weight = sum(
+        m.weight for m in projected_members if m.weight is not None and m.weight > 0
+    )
     est_weight = (
         clan_summary.estimated_weight * 1000
         if clan_summary is not None and clan_summary.estimated_weight is not None
         else None
     )
-    compare_weight = est_weight if est_weight is not None else roster_weight
+    compare_weight = est_weight if est_weight is not None else projected_weight
 
-    originals_bands = _member_band_counts(active_roster)
+    originals_bands = _member_band_counts(projected_members)
 
     rows: list[str] = ["TH    | FWA Med | Originals"]
     for key in DISPLAY_TH_KEYS:
-        vals = [c.th_counts.get(key, 0) for c in recent_clans]
-        fwa_med_th = round(statistics.median(vals))
+        fwa_med_th = adjusted_medians[key]
         orig_count = originals_bands.get(key, 0)
         if fwa_med_th == 0 and orig_count == 0:
             continue
         rows.append(f"{key:<5} | {fwa_med_th:>7} | {orig_count:>9}")
+    rows.append("------+---------+----------")
+    rows.append(f"Total | {sum(adjusted_medians.values()):>7} | {sum(originals_bands.values()):>9}")
 
     embed = discord.Embed(
         title=f"FWA Clan Median (Last {days}d) vs {clan_name} ({clan_tag})",
@@ -136,7 +183,12 @@ def format_average_embed(
         inline=True,
     )
 
-    originals_lines = [f"In-War Weight: **{roster_weight:,}** ({len(active_roster)} members)"]
+    roster_note = f"{current_count} current"
+    if provisional_count:
+        roster_note += f" + {provisional_count} prov."
+    originals_lines = [
+        f"Projected ({len(entries)}/{TARGET_WAR_SIZE}): **{projected_weight:,}** ({roster_note})"
+    ]
     if est_weight is not None:
         originals_lines.append(f"FWA Est. Weight: **{est_weight:,}**")
     originals_lines.append(f"vs Median: **{compare_weight - median_weight:+,}**")
@@ -146,7 +198,10 @@ def format_average_embed(
         inline=True,
     )
     embed.set_footer(
-        text=f"Source: fwastats.com (last {days}d Clans.json + Members.json) • Originals uses 10k weight bands"
+        text=(
+            f"Source: fwastats.com (last {days}d) • FWA Med adjusted to 50 by mean skew • "
+            "Originals uses 10k bands"
+        )
     )
     return embed
 
@@ -169,7 +224,9 @@ def build_average_command() -> app_commands.Command:
             await interaction.followup.send(f"Could not fetch FWA averages: {exc}", ephemeral=True)
             return
 
-        embed = format_average_embed(clans, members)
+        entries, _, _ = await load_projected_roster(bot.db, DEFAULT_CLAN_TAG, members)
+        departed = [e.member for e in entries if e.member not in members]
+        embed = format_average_embed(clans, members, departed_members=departed)
         await interaction.followup.send(embed=embed)
 
     return average_command

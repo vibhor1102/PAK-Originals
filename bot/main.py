@@ -11,6 +11,7 @@ from discord.ext import commands
 from .commands.average import build_average_command
 from .commands.weights import build_weights_command
 from .config import AppConfig
+from .database import Database
 from .fwastats import FwaStatsClient
 
 LOGGER = logging.getLogger(__name__)
@@ -19,10 +20,11 @@ LOGGER = logging.getLogger(__name__)
 class PakOriginalsBot(commands.Bot):
     """Discord bot for The Originals clan."""
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, db: Database | None = None) -> None:
         intents = discord.Intents.default()
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self.config = config
+        self.db = db if db is not None else Database(None)
         self.fwastats = FwaStatsClient()
 
     async def setup_hook(self) -> None:
@@ -61,6 +63,7 @@ def create_web_app(bot: PakOriginalsBot) -> web.Application:
             {
                 "status": "ok",
                 "discord_ready": bot.is_ready(),
+                "database_connected": bot.db.connected,
                 "latency_ms": latency_ms,
             }
         )
@@ -85,12 +88,15 @@ async def run() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     config = AppConfig.from_env()
-    bot = PakOriginalsBot(config)
+    db = Database(config.database_url)
+    await db.connect()
+    bot = PakOriginalsBot(config, db=db)
     runner = await start_web_server(bot, config.port)
     try:
         await bot.start(config.discord_token)
     finally:
         await bot.close()
+        await db.close()
         await runner.cleanup()
 
 

@@ -1,18 +1,29 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 
 from ..config import DEFAULT_CLAN_NAME, DEFAULT_CLAN_TAG
-from ..fwastats import FwaStatsError, MemberWeight, weight_to_th_band
+from ..fwastats import FwaStatsError, MemberWeight, normalize_tag, weight_to_th_band
 
 if TYPE_CHECKING:
+    from ..database import Database
     from ..main import PakOriginalsBot
 
 MAX_EMBED_DESCRIPTION = 4096
+TARGET_WAR_SIZE = 50
+
+
+@dataclass(frozen=True, slots=True)
+class RosterEntry:
+    """Member entry in the projected war roster."""
+
+    member: MemberWeight
+    provisional: bool = False
 
 
 def sort_members_by_weight(members: list[MemberWeight]) -> list[MemberWeight]:
@@ -28,6 +39,55 @@ def sort_members_by_weight(members: list[MemberWeight]) -> list[MemberWeight]:
     )
 
 
+def build_provisional_roster(
+    current_members: list[MemberWeight],
+    departed_members: list[MemberWeight] | None = None,
+    *,
+    target_size: int = TARGET_WAR_SIZE,
+) -> tuple[list[RosterEntry], int, int]:
+    """Build up to `target_size` war roster entries, filling missing slots with departed members."""
+    current_sorted = sort_members_by_weight(current_members)
+    entries: list[RosterEntry] = [
+        RosterEntry(m, provisional=False) for m in current_sorted[:target_size]
+    ]
+
+    if len(entries) < target_size and departed_members:
+        needed = target_size - len(entries)
+        entries.extend(RosterEntry(m, provisional=True) for m in departed_members[:needed])
+
+    entries.sort(
+        key=lambda e: (
+            -(e.member.weight if e.member.weight is not None else -1),
+            -(e.member.town_hall if e.member.town_hall is not None else -1),
+            e.member.rank if e.member.rank is not None else 999,
+            e.member.name.lower(),
+        )
+    )
+    current_count = sum(1 for e in entries if not e.provisional)
+    provisional_count = sum(1 for e in entries if e.provisional)
+    return entries, current_count, provisional_count
+
+
+async def load_projected_roster(
+    db: Database,
+    clan_tag: str,
+    current_members: list[MemberWeight],
+    *,
+    target_size: int = TARGET_WAR_SIZE,
+) -> tuple[list[RosterEntry], int, int]:
+    """Record current members in DB and fill any shortfall up to `target_size` from history."""
+    await db.record_clan_members(clan_tag, current_members)
+    departed: list[MemberWeight] = []
+    if len(current_members) < target_size:
+        exclude = {normalize_tag(m.tag) for m in current_members if m.tag.strip()}
+        departed = await db.get_recent_departed_members(
+            clan_tag,
+            exclude_tags=exclude,
+            limit=target_size - len(current_members),
+        )
+    return build_provisional_roster(current_members, departed, target_size=target_size)
+
+
 def summarize_weight_bands(members: list[MemberWeight]) -> Counter[int]:
     """Count members in each 10k war-weight TH band."""
     counts: Counter[int] = Counter()
@@ -39,26 +99,35 @@ def summarize_weight_bands(members: list[MemberWeight]) -> Counter[int]:
 
 
 def format_weights_embed(
-    members: list[MemberWeight],
+    current_members: list[MemberWeight],
     *,
+    departed_members: list[MemberWeight] | None = None,
     clan_name: str = DEFAULT_CLAN_NAME,
     clan_tag: str = DEFAULT_CLAN_TAG,
 ) -> discord.Embed:
-    """Build a Discord embed displaying clan member war weights categorized by TH weight band."""
-    sorted_members = sort_members_by_weight(members)
-    weighed = [m for m in sorted_members if m.weight is not None and m.weight > 0]
-    in_war = [m for m in sorted_members if m.in_war is True]
-    in_war_weight = sum(m.weight for m in in_war if m.weight is not None and m.weight > 0)
-    total_weight = sum(m.weight for m in weighed if m.weight is not None)
+    """Build a Discord embed displaying projected 50-member war weights by TH weight band."""
+    entries, current_count, provisional_count = build_provisional_roster(
+        current_members, departed_members, target_size=TARGET_WAR_SIZE
+    )
+    projected_members = [e.member for e in entries]
+    projected_weight = sum(
+        m.weight for m in projected_members if m.weight is not None and m.weight > 0
+    )
+    current_weight = sum(
+        e.member.weight
+        for e in entries
+        if not e.provisional and e.member.weight is not None and e.member.weight > 0
+    )
 
-    band_counts = summarize_weight_bands(in_war if in_war else sorted_members)
+    band_counts = summarize_weight_bands(projected_members)
     band_summary = " • ".join(
         f"TH{th}: {band_counts[th]}" for th in sorted(band_counts, reverse=True)
     ) or "None"
 
     lines: list[str] = []
-    for idx, member in enumerate(sorted_members, start=1):
-        war_mark = "*" if member.in_war else " "
+    for idx, entry in enumerate(entries, start=1):
+        member = entry.member
+        mark = "~" if entry.provisional else " "
         band_th = weight_to_th_band(member.weight)
         band_label = f"TH{band_th:<2}" if band_th is not None else "TH??"
         weight_label = f"{member.weight:>7,}" if member.weight is not None else "    N/A"
@@ -67,7 +136,7 @@ def format_weights_embed(
             if member.town_hall is not None and band_th is not None and member.town_hall != band_th
             else ""
         )
-        lines.append(f"{idx:>2}.{war_mark} {band_label} | {weight_label} | {member.name}{actual_note}")
+        lines.append(f"{idx:>2}.{mark} {band_label} | {weight_label} | {member.name}{actual_note}")
 
     body = "\n".join(lines) if lines else "No members found."
     code_block = f"```\n{body}\n```"
@@ -88,15 +157,22 @@ def format_weights_embed(
         description=code_block,
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Members", value=f"{len(sorted_members)} ({len(in_war)} in war)", inline=True)
-    embed.add_field(name="In-War Weight", value=f"{in_war_weight:,}", inline=True)
-    embed.add_field(name="Total Roster Weight", value=f"{total_weight:,}", inline=True)
+    member_summary = f"{len(entries)}/{TARGET_WAR_SIZE} ({current_count} current"
+    if provisional_count:
+        member_summary += f", {provisional_count} prov."
+    member_summary += ")"
+
+    embed.add_field(name="Roster", value=member_summary, inline=True)
+    embed.add_field(name="Current Weight", value=f"{current_weight:,}", inline=True)
     embed.add_field(
-        name="Weight-Band THs (In War)" if in_war else "Weight-Band THs",
-        value=band_summary,
-        inline=False,
+        name=f"Projected Weight ({len(entries)}/{TARGET_WAR_SIZE})",
+        value=f"{projected_weight:,}",
+        inline=True,
     )
-    embed.set_footer(text="Source: fwastats.com • * = In War • Bands: (170k,180k]=TH18, (180k,190k]=TH19")
+    embed.add_field(name="Weight-Band THs", value=band_summary, inline=False)
+    embed.set_footer(
+        text="Source: fwastats.com • ~ = Provisional (departed) • Bands: (170k,180k]=TH18, (180k,190k]=TH19"
+    )
     return embed
 
 
@@ -122,7 +198,9 @@ def build_weights_command() -> app_commands.Command:
             )
             return
 
-        embed = format_weights_embed(members)
+        entries, _, _ = await load_projected_roster(bot.db, DEFAULT_CLAN_TAG, members)
+        departed = [e.member for e in entries if e.member not in members]
+        embed = format_weights_embed(members, departed_members=departed)
         await interaction.followup.send(embed=embed)
 
     return weights_command
