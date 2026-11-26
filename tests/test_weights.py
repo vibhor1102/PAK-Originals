@@ -3,7 +3,14 @@ from __future__ import annotations
 import unittest
 
 from bot.commands.weights import build_provisional_roster, format_weights_embed, sort_members_by_weight
-from bot.fwastats import FwaStatsError, MemberWeight, normalize_tag, parse_member_weights, weight_to_th_band
+from bot.fwastats import (
+    FwaStatsError,
+    MemberWeight,
+    normalize_tag,
+    parse_member_weights,
+    parse_war_members,
+    weight_to_th_band,
+)
 
 
 class FwaStatsParsingTests(unittest.TestCase):
@@ -52,6 +59,22 @@ class FwaStatsParsingTests(unittest.TestCase):
     def test_parse_member_weights_rejects_non_list(self) -> None:
         with self.assertRaises(FwaStatsError):
             parse_member_weights({"error": "bad"})
+
+    def test_parse_war_members_valid_payload(self) -> None:
+        payload = [
+            {
+                "position": 1,
+                "tag": "#LPCUP8LL",
+                "name": "Tom7363",
+                "townHall": 19,
+                "weight": 179000,
+            }
+        ]
+        members = parse_war_members(payload)
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].tag, "#LPCUP8LL")
+        self.assertEqual(members[0].weight, 179000)
+        self.assertEqual(members[0].rank, 1)
 
 
 class WeightsFormattingTests(unittest.TestCase):

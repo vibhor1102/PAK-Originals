@@ -118,6 +118,29 @@ def parse_member_weights(payload: Any) -> list[MemberWeight]:
     return members
 
 
+def parse_war_members(payload: Any) -> list[MemberWeight]:
+    """Parse fwastats WarMembers.json payload into MemberWeight records."""
+    if not isinstance(payload, list):
+        raise FwaStatsError(f"Expected a JSON list from fwastats, got {type(payload).__name__}.")
+
+    members: list[MemberWeight] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        members.append(
+            MemberWeight(
+                tag=str(item.get("tag") or "").strip(),
+                name=str(item.get("name") or "Unknown").strip(),
+                town_hall=_coerce_int(item.get("townHall")),
+                weight=_coerce_int(item.get("weight")),
+                in_war=True,
+                rank=_coerce_int(item.get("position")),
+                role=None,
+            )
+        )
+    return members
+
+
 def parse_clan_summaries(payload: Any) -> list[ClanSummary]:
     """Parse fwastats Clans.json payload into ClanSummary records."""
     if not isinstance(payload, list):
@@ -169,6 +192,13 @@ class FwaStatsClient:
         url = f"{FWASTATS_BASE_URL}/Clan/{normalized.lstrip('#')}/Members.json"
         payload = await self._get_json(url, context=normalized)
         return parse_member_weights(payload)
+
+    async def fetch_war_members(self, clan_tag: str, *, war_no: int = 1) -> list[MemberWeight]:
+        """Fetch war roster members for a clan from fwastats.com/Clan/<TAG>/WarMembers.json."""
+        normalized = normalize_tag(clan_tag)
+        url = f"{FWASTATS_BASE_URL}/Clan/{normalized.lstrip('#')}/WarMembers.json?warNo={war_no}"
+        payload = await self._get_json(url, context=f"{normalized} warNo={war_no}")
+        return parse_war_members(payload)
 
     async def fetch_all_clans(self) -> list[ClanSummary]:
         """Fetch all FWA clan summaries from fwastats.com/Clans.json."""

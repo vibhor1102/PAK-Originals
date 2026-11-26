@@ -11,7 +11,7 @@ from discord import app_commands
 
 from ..config import DEFAULT_CLAN_NAME, DEFAULT_CLAN_TAG
 from ..fwastats import ClanSummary, FwaStatsError, MemberWeight, normalize_tag, weight_to_th_band
-from .weights import TARGET_WAR_SIZE, build_provisional_roster, load_projected_roster
+from .weights import TARGET_WAR_SIZE, build_provisional_roster, fetch_projected_roster
 
 if TYPE_CHECKING:
     from ..main import PakOriginalsBot
@@ -224,8 +224,7 @@ def build_average_command() -> app_commands.Command:
             await interaction.followup.send(f"Could not fetch FWA averages: {exc}", ephemeral=True)
             return
 
-        entries, _, _ = await load_projected_roster(bot.db, DEFAULT_CLAN_TAG, members)
-        departed = [e.member for e in entries if e.member not in members]
+        _, _, _, departed = await fetch_projected_roster(bot.fwastats, DEFAULT_CLAN_TAG, members)
         embed = format_average_embed(clans, members, departed_members=departed)
         await interaction.followup.send(embed=embed)
 

@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import logging
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 
 from ..config import DEFAULT_CLAN_NAME, DEFAULT_CLAN_TAG
-from ..fwastats import FwaStatsError, MemberWeight, normalize_tag, weight_to_th_band
+from ..fwastats import FwaStatsClient, FwaStatsError, MemberWeight, normalize_tag, weight_to_th_band
 
 if TYPE_CHECKING:
-    from ..database import Database
     from ..main import PakOriginalsBot
 
+LOGGER = logging.getLogger(__name__)
 MAX_EMBED_DESCRIPTION = 4096
 TARGET_WAR_SIZE = 50
 
@@ -68,24 +69,31 @@ def build_provisional_roster(
     return entries, current_count, provisional_count
 
 
-async def load_projected_roster(
-    db: Database,
+async def fetch_projected_roster(
+    fwastats: FwaStatsClient,
     clan_tag: str,
     current_members: list[MemberWeight],
     *,
     target_size: int = TARGET_WAR_SIZE,
-) -> tuple[list[RosterEntry], int, int]:
-    """Record current members in DB and fill any shortfall up to `target_size` from history."""
-    await db.record_clan_members(clan_tag, current_members)
+) -> tuple[list[RosterEntry], int, int, list[MemberWeight]]:
+    """Fill any shortfall below `target_size` using previous-war members from WarMembers.json?warNo=1."""
     departed: list[MemberWeight] = []
     if len(current_members) < target_size:
-        exclude = {normalize_tag(m.tag) for m in current_members if m.tag.strip()}
-        departed = await db.get_recent_departed_members(
-            clan_tag,
-            exclude_tags=exclude,
-            limit=target_size - len(current_members),
-        )
-    return build_provisional_roster(current_members, departed, target_size=target_size)
+        current_tags = {normalize_tag(m.tag) for m in current_members if m.tag.strip()}
+        try:
+            prev_war_members = await fwastats.fetch_war_members(clan_tag, war_no=1)
+            departed = [
+                m
+                for m in sort_members_by_weight(prev_war_members)
+                if m.tag.strip() and normalize_tag(m.tag) not in current_tags
+            ]
+        except FwaStatsError as exc:
+            LOGGER.warning("Could not fetch WarMembers.json?warNo=1 for %s: %s", clan_tag, exc)
+
+    entries, current_count, provisional_count = build_provisional_roster(
+        current_members, departed, target_size=target_size
+    )
+    return entries, current_count, provisional_count, departed
 
 
 def summarize_weight_bands(members: list[MemberWeight]) -> Counter[int]:
@@ -171,7 +179,7 @@ def format_weights_embed(
     )
     embed.add_field(name="Weight-Band THs", value=band_summary, inline=False)
     embed.set_footer(
-        text="Source: fwastats.com • ~ = Provisional (departed) • Bands: (170k,180k]=TH18, (180k,190k]=TH19"
+        text="Source: fwastats.com • ~ = Provisional (last war) • Bands: (170k,180k]=TH18, (180k,190k]=TH19"
     )
     return embed
 
@@ -198,8 +206,7 @@ def build_weights_command() -> app_commands.Command:
             )
             return
 
-        entries, _, _ = await load_projected_roster(bot.db, DEFAULT_CLAN_TAG, members)
-        departed = [e.member for e in entries if e.member not in members]
+        _, _, _, departed = await fetch_projected_roster(bot.fwastats, DEFAULT_CLAN_TAG, members)
         embed = format_weights_embed(members, departed_members=departed)
         await interaction.followup.send(embed=embed)
 
