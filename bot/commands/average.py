@@ -116,11 +116,11 @@ def format_average_embed(
     rows: list[str] = ["TH    | FWA Med | Originals"]
     for key in DISPLAY_TH_KEYS:
         vals = [c.th_counts.get(key, 0) for c in recent_clans]
-        fwa_med_th = statistics.median(vals)
+        fwa_med_th = round(statistics.median(vals))
         orig_count = originals_bands.get(key, 0)
         if fwa_med_th == 0 and orig_count == 0:
             continue
-        rows.append(f"{key:<5} | {fwa_med_th:>7.1f} | {orig_count:>9}")
+        rows.append(f"{key:<5} | {fwa_med_th:>7} | {orig_count:>9}")
 
     embed = discord.Embed(
         title=f"FWA Clan Median (Last {days}d) vs {clan_name} ({clan_tag})",

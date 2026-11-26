@@ -55,8 +55,8 @@ class AverageCommandTests(unittest.TestCase):
         ]
         embed = format_average_embed(clans, members, now=now)
         self.assertIn("FWA Clan Median (Last 7d) vs The Originals", embed.title or "")
-        self.assertIn("TH19  |    11.0 |         1", embed.description or "")
-        self.assertIn("TH18  |    13.0 |         1", embed.description or "")
+        self.assertIn("TH19  |      11 |         1", embed.description or "")
+        self.assertIn("TH18  |      13 |         1", embed.description or "")
 
         fields = {f.name: f.value for f in embed.fields}
         self.assertIn("Median: **7,900,000**", fields["FWA Weight (2/4 clans, 7d)"])
